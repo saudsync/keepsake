@@ -5,6 +5,8 @@ Routes
   GET  /api/file   ?u=<cdn url>&name=<file name>&dl=1  -> streams one file
   POST /api/zip    {"items": [{"url": "...", "name": "..."}]} -> ZIP file
 """
+import base64
+import json
 import os
 import re
 import tempfile
@@ -18,6 +20,8 @@ from flask import Flask, Response, abort, jsonify, request, send_file, stream_wi
 from flask_cors import CORS
 
 app = Flask(__name__)
+
+# Set ALLOWED_ORIGINS to your GitHub Pages address, e.g. https://yourname.github.io
 origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 CORS(app, origins=origins)
 
@@ -29,8 +33,12 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-POST_RE = re.compile(r"instagram\.com/(?:[A-Za-z0-9_.]+/)?(p|reel|reels|tv)/([A-Za-z0-9_-]+)")
+POST_RE = re.compile(
+    r"instagram\.com/(?:[A-Za-z0-9_.]+/)?(p|reel|reels|tv)/([A-Za-z0-9_-]+)"
+)
 
+# Optional: paste the contents of a Netscape cookies.txt into the IG_COOKIES
+# environment variable if Instagram starts asking for a login.
 COOKIE_FILE = None
 if os.environ.get("IG_COOKIES"):
     COOKIE_FILE = os.path.join(tempfile.gettempdir(), "ig_cookies.txt")
@@ -41,7 +49,9 @@ YDL_OPTS = {"quiet": True, "no_warnings": True, "skip_download": True}
 if COOKIE_FILE:
     YDL_OPTS["cookiefile"] = COOKIE_FILE
 
+# ---- tiny in-memory rate limit (per IP) ----
 HITS = {}
+
 
 def limited(ip, limit=15, window=600):
     now = time.time()
@@ -53,17 +63,22 @@ def limited(ip, limit=15, window=600):
     HITS[ip] = recent
     return False
 
+
 def client_ip():
     fwd = request.headers.get("X-Forwarded-For", "")
     return (fwd.split(",")[0].strip() if fwd else request.remote_addr) or "unknown"
 
+
 def safe_name(name):
     return re.sub(r"[^A-Za-z0-9._-]", "_", name or "instagram-media")[:100]
+
 
 def is_cdn(url):
     p = urlparse(url or "")
     return p.scheme == "https" and (p.hostname or "").endswith(CDN_SUFFIXES)
 
+
+# ---- extraction ----
 def via_ytdlp(url, shortcode):
     with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -78,25 +93,66 @@ def via_ytdlp(url, shortcode):
             continue
         ext = e.get("ext") or "mp4"
         is_video = ext in ("mp4", "webm", "mov", "m4v")
-        items.append({"url": media, "kind": "video" if is_video else "image", "thumb": e.get("thumbnail") or (None if is_video else media), "name": f"{shortcode}_{i}.{ext}"})
-    return {"title": (info.get("title") or "")[:90], "uploader": info.get("uploader") or info.get("channel") or "", "items": items}
+        items.append(
+            {
+                "url": media,
+                "kind": "video" if is_video else "image",
+                "thumb": e.get("thumbnail") or (None if is_video else media),
+                "name": f"{shortcode}_{i}.{ext}",
+            }
+        )
+    return {
+        "title": (info.get("title") or "")[:90],
+        "uploader": info.get("uploader") or info.get("channel") or "",
+        "items": items,
+    }
 
-def via_instaloader(shortcode):
-    import instaloader
-    loader = instaloader.Instaloader(quiet=True, download_pictures=False, download_videos=False)
-    post = instaloader.Post.from_shortcode(loader.context, shortcode)
+
+def items_from_post(post, prefix):
+    """Turn an instaloader Post into a list of downloadable files."""
+    sc = post.shortcode
     items = []
     if post.typename == "GraphSidecar":
         for i, node in enumerate(post.get_sidecar_nodes(), 1):
             if node.is_video:
-                items.append({"url": node.video_url, "kind": "video", "thumb": node.display_url, "name": f"{shortcode}_{i}.mp4"})
+                items.append({"url": node.video_url, "kind": "video", "thumb": node.display_url,
+                              "name": f"{prefix}{sc}_{i}.mp4"})
             else:
-                items.append({"url": node.display_url, "kind": "image", "thumb": node.display_url, "name": f"{shortcode}_{i}.jpg"})
+                items.append({"url": node.display_url, "kind": "image", "thumb": node.display_url,
+                              "name": f"{prefix}{sc}_{i}.jpg"})
     elif post.is_video:
-        items.append({"url": post.video_url, "kind": "video", "thumb": post.url, "name": f"{shortcode}_1.mp4"})
+        items.append({"url": post.video_url, "kind": "video", "thumb": post.url,
+                      "name": f"{prefix}{sc}_1.mp4"})
     else:
-        items.append({"url": post.url, "kind": "image", "thumb": post.url, "name": f"{shortcode}_1.jpg"})
-    return {"title": (post.caption or "")[:90], "uploader": post.owner_username, "items": items}
+        items.append({"url": post.url, "kind": "image", "thumb": post.url,
+                      "name": f"{prefix}{sc}_1.jpg"})
+    return items
+
+
+def new_loader():
+    import instaloader
+
+    return instaloader.Instaloader(
+        quiet=True,
+        download_pictures=False,
+        download_videos=False,
+        save_metadata=False,
+        max_connection_attempts=1,
+        request_timeout=20,
+    )
+
+
+def via_instaloader(shortcode):
+    import instaloader
+
+    loader = new_loader()
+    post = instaloader.Post.from_shortcode(loader.context, shortcode)
+    return {
+        "title": (post.caption or "")[:90],
+        "uploader": post.owner_username,
+        "items": items_from_post(post, ""),
+    }
+
 
 def fetch_post(url):
     m = POST_RE.search(url)
@@ -117,9 +173,12 @@ def fetch_post(url):
     result["source"] = url
     return result
 
+
+# ---- routes ----
 @app.get("/")
 def health():
     return jsonify(status="ok")
+
 
 @app.post("/api/info")
 def info():
@@ -130,6 +189,83 @@ def info():
     if not urls:
         return jsonify(error="Paste at least one post or reel link."), 400
     return jsonify(results=[fetch_post(u) for u in urls])
+
+
+PAGE_SIZE = 30
+USERNAME_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
+
+
+def enc_cursor(d):
+    return base64.urlsafe_b64encode(json.dumps(d).encode()).decode()
+
+
+def dec_cursor(s):
+    return json.loads(base64.urlsafe_b64decode(s.encode()))
+
+
+@app.get("/api/profile")
+def profile():
+    """One page (30 posts) of a public profile. Pass the returned `next` as `cursor` for the next page."""
+    if limited(client_ip(), limit=40):
+        return jsonify(error="Too many requests. Wait a few minutes and try again."), 429
+
+    raw = request.args.get("username", "").strip().lstrip("@")
+    m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", raw)
+    username = (m.group(1) if m else raw).lower()
+    if not USERNAME_RE.match(username):
+        return jsonify(error="That doesn't look like an Instagram username."), 400
+
+    import instaloader
+
+    loader = new_loader()
+    try:
+        prof = instaloader.Profile.from_username(loader.context, username)
+    except instaloader.ProfileNotExistsException:
+        return jsonify(error=f"No account named @{username} was found."), 404
+    except Exception:
+        return jsonify(error="Instagram didn't answer. The server may be rate-limited. Wait a few minutes and try again."), 503
+
+    if prof.is_private:
+        return jsonify(error=f"@{username} is private. Only public profiles can be loaded."), 403
+
+    posts = []
+    it = prof.get_posts()
+    cursor = request.args.get("cursor")
+    try:
+        if cursor:
+            it.thaw(instaloader.FrozenNodeIterator(**dec_cursor(cursor)))
+        for post in it:
+            try:
+                items = items_from_post(post, f"{username}_")
+            except Exception:
+                continue
+            kind = "carousel" if len(items) > 1 else (items[0]["kind"] if items else "image")
+            posts.append({
+                "id": post.shortcode,
+                "thumb": post.url,
+                "kind": kind,
+                "count": len(items),
+                "date": post.date_utc.strftime("%Y-%m-%d"),
+                "caption": (post.caption or "")[:80],
+                "items": items,
+            })
+            if len(posts) >= PAGE_SIZE:
+                break
+        next_cursor = enc_cursor(it.freeze()._asdict()) if len(posts) >= PAGE_SIZE else None
+    except Exception:
+        if not posts:
+            return jsonify(error="Couldn't load posts. Instagram may be limiting the server. Wait a few minutes and try again."), 503
+        next_cursor = None  # return what we got; the user can retry for the rest
+
+    return jsonify(
+        username=username,
+        full_name=prof.full_name,
+        total=prof.mediacount,
+        page_size=PAGE_SIZE,
+        posts=posts,
+        next=next_cursor,
+    )
+
 
 @app.get("/api/file")
 def file():
@@ -143,6 +279,7 @@ def file():
     if request.args.get("dl") == "1":
         headers["Content-Disposition"] = f'attachment; filename="{safe_name(request.args.get("name"))}"'
     return Response(stream_with_context(upstream.iter_content(65536)), headers=headers)
+
 
 @app.post("/api/zip")
 def make_zip():
@@ -175,6 +312,7 @@ def make_zip():
                     out.write(chunk)
     tmp.seek(0)
     return send_file(tmp, mimetype="application/zip", as_attachment=True, download_name="keepsake.zip")
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
