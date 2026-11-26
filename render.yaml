@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: keepsake-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --timeout 120 --workers 1 --threads 4
+    envVars:
+      - key: ALLOWED_ORIGINS
+        sync: false

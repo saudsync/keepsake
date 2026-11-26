@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keepsake – save public Instagram posts and reels</title>
+<meta name="description" content="Paste Instagram post or reel links and download the photos and videos. Free, no sign-up, no credits.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --paper: #e8ecef; --ink: #1a2a3a; --muted: #55646f; --line: #c3ccd3; --frame: #ffffff; --safelight: #c93a24; --safelight-dark: #a52d1a; --strip: #16212c; color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: "Instrument Sans", system-ui, sans-serif; font-size: 16px; line-height: 1.55; }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1 { font-family: "Bricolage Grotesque", sans-serif; font-weight: 700; font-size: clamp(2.2rem, 7vw, 3.6rem); line-height: 1.02; letter-spacing: -0.02em; margin: 0 0 14px; max-width: 14ch; }
+  .lede { color: var(--muted); max-width: 46ch; margin: 0 0 32px; }
+  label { display: block; font-weight: 600; margin-bottom: 8px; }
+  textarea { width: 100%; min-height: 120px; padding: 14px; border: 1.5px solid var(--line); border-radius: 6px; background: var(--frame); font: inherit; color: var(--ink); resize: vertical; }
+  textarea:focus-visible, button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid var(--safelight); outline-offset: 2px; }
+  .hint { color: var(--muted); font-size: 0.9rem; margin: 6px 0 16px; }
+  .btn { display: inline-block; border: 0; border-radius: 6px; padding: 12px 20px; background: var(--safelight); color: #fff; font: 600 1rem "Instrument Sans", sans-serif; text-decoration: none; cursor: pointer; }
+  .btn:hover { background: var(--safelight-dark); }
+  .btn:disabled { opacity: 0.55; cursor: wait; }
+  #status { margin: 18px 0 0; min-height: 1.5em; color: var(--muted); }
+  #status.error { color: var(--safelight-dark); font-weight: 500; }
+  #results { margin-top: 36px; }
+  .post { margin-bottom: 36px; }
+  .post-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 10px; }
+  .post-head h2 { font-family: "Bricolage Grotesque", sans-serif; font-size: 1.15rem; margin: 0; }
+  .post-head span { color: var(--muted); font-size: 0.9rem; }
+  .post-error { border-left: 4px solid var(--safelight); background: var(--frame); padding: 12px 14px; border-radius: 0 6px 6px 0; }
+  .post-error small { display: block; color: var(--muted); word-break: break-all; }
+  .strip { background: var(--strip); border-radius: 6px; padding: 22px 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; position: relative; background-image: radial-gradient(circle, var(--paper) 2.5px, transparent 3px), radial-gradient(circle, var(--paper) 2.5px, transparent 3px); background-size: 18px 10px, 18px 10px; background-position: 4px 5px, 4px calc(100% - 5px); background-repeat: repeat-x, repeat-x; }
+  .frame { background: var(--frame); border-radius: 3px; overflow: hidden; display: flex; flex-direction: column; }
+  .thumb { aspect-ratio: 4 / 5; background: #cfd6dc; display: grid; place-items: center; color: var(--muted); font-size: 0.85rem; overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .frame-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px; font-size: 0.85rem; }
+  .frame-foot label { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 500; }
+  .frame-foot a { color: var(--safelight-dark); font-weight: 600; }
+  #bar { position: sticky; bottom: 0; margin-top: 8px; padding: 14px 0; background: var(--paper); border-top: 1px solid var(--line); display: none; gap: 12px; align-items: center; flex-wrap: wrap; }
+  #bar.on { display: flex; }
+  #count { color: var(--muted); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.85rem; max-width: 60ch; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Save Instagram posts, free.</h1>
+  <p class="lede">Paste links to public posts or reels. Download each file, or take them all in one ZIP. No account, no credits.</p>
+  <label for="links">Post or reel links</label>
+  <textarea id="links" placeholder="https://www.instagram.com/p/…&#10;https://www.instagram.com/reel/…" spellcheck="false"></textarea>
+  <p class="hint">One link per line, up to 10. Public posts only.</p>
+  <button class="btn" id="go" type="button">Get media</button>
+  <p id="status" role="status" aria-live="polite"></p>
+  <section id="results" aria-label="Results"></section>
+  <div id="bar">
+    <button class="btn" id="zip" type="button">Download selected as ZIP</button>
+    <span id="count"></span>
+  </div>
+  <footer>Use this for content you own or have permission to save. Not affiliated with Instagram or Meta.</footer>
+</main>
+<script>
+  const API = "https://YOUR-APP-NAME.onrender.com";
+  const $ = (id) => document.getElementById(id);
+  const goBtn = $("go"), zipBtn = $("zip"), statusEl = $("status");
+  let items = [];
+  const proxy = (u, name, dl) => `${API}/api/file?u=${encodeURIComponent(u)}&name=${encodeURIComponent(name || "media")}${dl ? "&dl=1" : ""}`;
+  function setStatus(msg, isError) { statusEl.textContent = msg; statusEl.className = isError ? "error" : ""; }
+  function updateCount() { const n = document.querySelectorAll(".pick:checked").length; $("count").textContent = `${n} of ${items.length} selected`; zipBtn.disabled = n === 0; }
+  function render(results) {
+    const root = $("results"); root.replaceChildren(); items = [];
+    results.forEach((r) => {
+      const post = document.createElement("div"); post.className = "post";
+      if (r.error) { const box = document.createElement("div"); box.className = "post-error"; box.textContent = r.error; const src = document.createElement("small"); src.textContent = r.source; box.appendChild(src); post.appendChild(box); root.appendChild(post); return; }
+      const head = document.createElement("div"); head.className = "post-head"; const h = document.createElement("h2"); h.textContent = r.uploader ? `@${r.uploader}` : "Post"; head.appendChild(h);
+      if (r.title) { const t = document.createElement("span"); t.textContent = r.title; head.appendChild(t); }
+      post.appendChild(head);
+      const strip = document.createElement("div"); strip.className = "strip";
+      r.items.forEach((it) => {
+        const idx = items.push(it) - 1; const frame = document.createElement("div"); frame.className = "frame";
+        const thumb = document.createElement("div"); thumb.className = "thumb";
+        if (it.thumb) { const img = document.createElement("img"); img.alt = `${it.kind} preview`; img.loading = "lazy"; img.src = proxy(it.thumb, "preview.jpg", false); img.onerror = () => { thumb.textContent = it.kind; }; thumb.appendChild(img); } else { thumb.textContent = it.kind; }
+        const foot = document.createElement("div"); foot.className = "frame-foot"; const lab = document.createElement("label"); const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "pick"; cb.checked = true; cb.dataset.idx = idx; cb.addEventListener("change", updateCount); lab.append(cb, it.kind);
+        const a = document.createElement("a"); a.href = proxy(it.url, it.name, true); a.textContent = "Download"; foot.append(lab, a); frame.append(thumb, foot); strip.appendChild(frame);
+      });
+      post.appendChild(strip); root.appendChild(post);
+    });
+    $("bar").classList.toggle("on", items.length > 0); updateCount();
+  }
+  goBtn.addEventListener("click", async () => {
+    const urls = $("links").value.split(/\s+/).filter((s) => s.includes("instagram.com"));
+    if (!urls.length) { setStatus("Paste at least one Instagram post or reel link.", true); return; }
+    goBtn.disabled = true; setStatus("Fetching… the first request can take up to a minute while the free server wakes up.");
+    try { const res = await fetch(`${API}/api/info`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || "Something went wrong."); render(data.results); const found = items.length; setStatus(found ? `Found ${found} file${found === 1 ? "" : "s"}.` : "No files found for these links.", !found); }
+    catch (e) { setStatus(e instanceof TypeError ? "Can't reach the server. Check that API at the top of index.html points to your backend, then try again." : e.message, true); }
+    finally { goBtn.disabled = false; }
+  });
+  zipBtn.addEventListener("click", async () => {
+    const chosen = [...document.querySelectorAll(".pick:checked")].map((c) => items[+c.dataset.idx]); if (!chosen.length) return;
+    zipBtn.disabled = true; setStatus("Building your ZIP…");
+    try { const res = await fetch(`${API}/api/zip`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: chosen.map((c) => ({ url: c.url, name: c.name })) }) }); if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "Couldn't build the ZIP."); } const blob = await res.blob(); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "keepsake.zip"; document.body.appendChild(link); link.click(); link.remove(); setStatus("ZIP downloaded."); }
+    catch (e) { setStatus(e.message, true); }
+    finally { updateCount(); }
+  });
+</script>
+</body>
+</html>
